@@ -21,6 +21,17 @@ class ObjectAudit {
         }
     }
 }
+class ADFSAudit {
+
+}
+class ConfigAudit {
+    [string]$Identity
+    [string]$Access
+    [string]$AuditingFlags
+    [string]$InheritanceType
+    [string]$ObjectPath
+    [bool]$AuditSet = $flase
+}
 #endregion Classes
 
 function Get-MDIObjectLevelAuditing {
@@ -157,6 +168,67 @@ function Get-MDIADFSAuditing {
             $CheckAuditing = $true
         }
         return $CheckAuditing
+    }
+}
+function Get-MDIExchangeAuditing {
+    [CmdletBinding()]
+    param (
+        
+    )
+    
+    begin {
+        $ConfigObj = New-object -TypeName ConfigAudit
+        $RootDirEntry = [System.DirectoryServices.DirectoryEntry]::new("LDAP://RootDSE")
+        Write-Verbose "Connected to RootDSE: $($RootDirEntry.Path.ToString())"
+        Write-Verbose "Checking Domain: $($RootDirEntry.defaultNamingContext.ToString().Replace(',','.').Replace('DC=',''))"
+        $configurationContext = $RootDirEntry.Properties["configurationNamingContext"].Value
+        $ConfigObj.ObjectPath = $configurationContext
+    }
+    
+    process {
+        Write-host "MDIExchangeAuditing: Checking Exchange (Configuration) Container auditing"
+        try {
+            $de = [System.DirectoryServices.DirectoryEntry]::new("LDAP://" + $configurationContext)
+            $de.PsBase.Options.SecurityMasks = [System.DirectoryServices.SecurityMasks]::Sacl
+            $de.RefreshCache()
+        }
+        catch {
+            $e = [System.Exception]::new("Exception with Exchange (Configuration) container", $_.Exception)
+            throw $e
+        }
+        try {
+            [System.DirectoryServices.ActiveDirectorySecurity]$sec = $de.ObjectSecurity
+            foreach ($ar in $Sec.GetAuditRules($true, $true, [System.Security.Principal.NTAccount])) {
+                $GetIdentity = $ar.IdentityReference.ToString()
+                Write-Verbose "MDIExchangeAuditing: Got this Identity Reference in Audit Entry: $($GetIdentity)"
+                if ($GetIdentity -eq "Everyone") {
+                    $GetAuditAccess = $ar.ActiveDirectoryRights.ToString()
+                    if ($GetAuditAccess.Contains("WriteProperty")) {
+                        $GetInheritanceType = $ar.InheritanceType.ToString()
+                        if ($GetInheritanceType.Equals("All")) {
+                            $GetObjectType = $ar.InheritedObjectType.ToString()
+                            if ($GetObjectType.Equals("00000000-0000-0000-0000-000000000000")) {
+                                $GetAuditingFlags = $ar.AuditFlags.ToString()
+                                if ($GetAuditingFlags -eq "Success, Failure") {
+                                    $ConfigObj.Access = $GetAuditAccess
+                                    $ConfigObj.AuditingFlags = $GetAuditingFlags
+                                    $ConfigObj.InheritanceType = $GetInheritanceType
+                                    $ConfigObj.Identity = $GetIdentity
+                                    $ConfigObj.AuditSet = $true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            throw $_
+        }
+    }
+    
+    end {
+        return $ConfigObj
     }
 }
 Write-Warning "Module is still under developement"
